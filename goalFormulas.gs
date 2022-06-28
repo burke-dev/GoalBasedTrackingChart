@@ -1,26 +1,31 @@
 function dataAsPercentage(goalArray, rawDataArray){
-  const goalData = getGoalData(goalArray);
-  const filledEntries = formatRawData(goalArray, rawDataArray);
-  const valuesAsPercentage = getEntriesAsPercentageOfGoals(filledEntries, goalData);
+  const formattedData = getFormattedData(goalArray, rawDataArray);
+  const valuesAsPercentage = getEntriesAsPercentageOfGoals(formattedData);
 
   return valuesAsPercentage;
 }
 
 function formatRawData(goalArray, rawDataArray){
+  const formattedData = getFormattedData(goalArray, rawDataArray);
+
+  return formattedData.filledEntries;
+}
+
+function getFormattedData(goalArray, rawDataArray){
   const headersAndEntriesObj = getHeadersAndEntries(rawDataArray);
   const goalData = getGoalData(goalArray);
   const minMax = minMaxOfEachEntry(headersAndEntriesObj.entries, goalData);
   const dateRange = getDateRange(headersAndEntriesObj.entries, goalData);
   const mergedArrays = mergedRangeAndMinMax(minMax, dateRange);
   const filledEntries = fillSingleEmptyEntry(headersAndEntriesObj.headers, mergedArrays);
-
-  return filledEntries;
+  
+  return { filledEntries, goalData };
 }
 
-function getEntriesAsPercentageOfGoals(filledEntries, goalData){
-  if(Array.isArray(filledEntries)){
+function getEntriesAsPercentageOfGoals(formatedData){
+  if(Array.isArray(formatedData.filledEntries)){
     let headers = [];
-    return filledEntries.map((entry, i) => {
+    return formatedData.filledEntries.map((entry, i) => {
       if(Array.isArray(entry)){
         return entry.map((data, j) => {
           // i == 0 => column header titles
@@ -34,7 +39,7 @@ function getEntriesAsPercentageOfGoals(filledEntries, goalData){
               return '';
             }
             if(data != null){
-              let goal = goalData[headers[j]];
+              let goal = formatedData.goalData[headers[j]];
               let start = formatValue(goal.format, goal.start);
               let end = formatValue(goal.format, goal.end);
               return (start - data)/(start - end);
@@ -107,9 +112,7 @@ function getGoalDetails(goalData){
 
 function minMaxOfEachEntry(entries, goalData){
   return entries.map(entry => {
-    return [entry.date].concat(Object.keys(entry.values).map(key => {
-      return addVal(entry.values[key], goalData[key]);
-    }));
+    return [entry.date].concat(Object.keys(entry.values).map(key => addVal(entry.values[key], goalData[key])));
   });
 }
 
@@ -190,24 +193,19 @@ function getGoalData(goalArray){
     const startValues = String(goalArray[2]).split(",");
     const endValues = String(goalArray[3]).split(",");
     
-    let goal = {};
+    let goals = {};
     headerTitles.forEach((title, i) => {
       if(i != 0){
         const hiddenTitle = formatHiddenTitle(title);
         const format = formatValues[i].toLowerCase();
         const start = getGoalDateRange(startValues[i], format);
         const end = getGoalDateRange(endValues[i], format);
+        const isDescending = getIsDescending(format, start, end);
 
-        goal[hiddenTitle]  = {
-          title: title,
-          format: format,
-          start: start,
-          end: end,
-          isDescending: getIsDescending(format, start, end)
-          };
+        goals[hiddenTitle] = { title, format, start, end, isDescending };
       }
     });
-    return goal;
+    return goals;
   }
 }
 
