@@ -22,11 +22,8 @@ function formatRawDataForExport(rawDataArray){
     if(i == 0){
       emptyRow = allEntries.map(_ => `""`);
     }
-    const rowIsNotEmpty = allEntries.filter(n => n != '\"\"').join('') != '';
-    return rowIsNotEmpty
-      ? `[${allEntries.join(',')}],`
-      : null;
-  }).filter(n => n).concat(`[${emptyRow.join(',')}]`);
+    return `[${allEntries.join(',')}],`
+  }).filter(n => getCamelCase(n) != '').concat(`[${emptyRow.join(',')}]`);
 }
 
 // these are internal functions and are not used by the users
@@ -42,23 +39,28 @@ function getRawFormattedData(goalArray, rawDataArray){
   return { outputEntries, goalData };
 }
 
+// the object sent returned to the spreadsheet
 function convertBackToObject(headersAndEntriesObj){
-  return [headersAndEntriesObj.headers.map(header => header.title)].concat(Object.keys(headersAndEntriesObj.entries).map(key => {
-    let entry = headersAndEntriesObj.entries[key];
-    let row = [];
-    Object.keys(entry).forEach(e => {
-      if(e == 'sunday'){
-        row.push(slashedDate(entry[e]));
-      }
-      if(e == 'values'){
-        Object.keys(entry[e]).forEach(z => {
-          row.push(entry[e][z]);
+  return [headersAndEntriesObj.headers.map(header => header.title)]
+    .concat(Object.keys(headersAndEntriesObj.entries)
+      .map(objectKey => {
+        let entryRow = headersAndEntriesObj.entries[objectKey];
+        let row = [];
+        Object.keys(entryRow).forEach(entryKey => {
+          let value = entryRow[entryKey];
+          if(entryKey == 'sunday'){
+            row.push(slashedDate(value));
+          }
+          if(entryKey == 'values'){
+            Object.keys(entryRow[entryKey]).forEach(valueKey => {
+              row.push(value[valueKey]);
+            });
+          }
         });
-      }
-    });
-    return row;
-  }));
-}
+        return row;
+      })
+    );
+  }
 
 function getGoalData(goalArray){
   if(Array.isArray(goalArray)){
@@ -112,8 +114,8 @@ function getHeadersAndEntries(rawEntries){
         }
         return;
       }
-      Object.keys(entries[jKey].values).forEach((val, j) => {
-        entries[jKey].values[val].push(entryRow[j + 1]);
+      Object.keys(entries[jKey].values).forEach((valueKey, j) => {
+        entries[jKey].values[valueKey].push(entryRow[j + 1]);
       });
     });
     return { headers, entries };
@@ -145,32 +147,24 @@ function getDateRange(cleanedEntries, goalData){
   let currentDate = sortedDateRange[0];
   const lastDate = sortedDateRange.reverse()[0];
   const emptyValues = {};
-  Object.keys(goalData).forEach(key => {
-    if(key != 'dateData') {
-      emptyValues[`${key}`] = "";
-    }
-  });
+  Object.keys(goalData).forEach(key => { emptyValues[key] = ""; });
 
   let range = {
-    [`${getDateTitle(currentDate)}`]: dateRangeObject(currentDate, emptyValues)
+    [`${getDateTitle(currentDate)}`]: { sunday: currentDate, values: emptyValues }
   };
   while(new Date(currentDate) < new Date(lastDate)){
     let tempDate = new Date(currentDate.valueOf());
     tempDate.setDate(tempDate.getDate() + 7);
     currentDate = tempDate;
-    range[`${getDateTitle(currentDate)}`] = dateRangeObject(currentDate, emptyValues);
+    range[`${getDateTitle(currentDate)}`] = { sunday: currentDate, values: emptyValues };
   }
   return range;
 }
 
-function dateRangeObject(sunday, values){
-  return { sunday, values };
-}
-
 function fillGapsInEntriesData(entries, dateRange){
   Object.keys(dateRange).forEach(date => {
-    let doesNotcontainThisDate = !(entries[date] ?? false);
-    if(doesNotcontainThisDate){
+    const entriesDoesNotContainThisDate = !(entries[date] ?? false);
+    if(entriesDoesNotContainThisDate){
       entries[date] = dateRange[date];
     }
   });
@@ -178,15 +172,14 @@ function fillGapsInEntriesData(entries, dateRange){
 
 function fillSingleEmptyEntry(entries){
   let allKeys = Object.keys(entries);
-  allKeys.forEach((_, i) => {
+  allKeys.forEach((entryKey, i) => {
     let lastEntry = Object.keys(entries).length - 1;
     if(i > 0 && i < lastEntry){
-      Object.keys(entries[allKeys[i]].values).forEach(x => {
-        let entry = entries[allKeys[i]].values[x];
-        if(entry == ''){
-          let prev = entries[allKeys[i - 1]].values[x];
-          let next = entries[allKeys[i + 1]].values[x];
-          entries[allKeys[i]].values[x] = getValueIfEmpty(prev, next);
+      Object.keys(entries[entryKey].values).forEach(valueKey => {
+        if(entries[entryKey].values[valueKey] == ''){
+          let prev = entries[allKeys[i - 1]].values[valueKey];
+          let next = entries[allKeys[i + 1]].values[valueKey];
+          entries[entryKey].values[valueKey] = getValueIfEmpty(prev, next);
         }
       });
     }
@@ -227,7 +220,7 @@ function getEntriesAsPercentageOfGoals(formattedData){
 function getGoalDetails(goalData){
   let goals = {};
   Object.keys(goalData).forEach(key => {
-    let goal = goalData[key];
+    const goal = goalData[key];
     goals[key] = {
       format: goal.format,
       isDescending: getIsDescending(goal.format, goal.start, goal.end)
@@ -244,7 +237,7 @@ function pushPeakValueForWeek(allValues, goalDetails){
   if(removedEmptyValues.length == 1){
     return convertValueToNumberByFormat(goalDetails.format, removedEmptyValues[0]);
   }
-  let sortedValues = goalDetails.isDescending
+  const sortedValues = goalDetails.isDescending
     ? removedEmptyValues
     : removedEmptyValues.reverse();
   return convertValueToNumberByFormat(goalDetails.format, sortedValues[0]);
@@ -275,9 +268,9 @@ function convertValueToNumberByFormat(format, value){
   if(value !== ''){
     // Google Sheets stores Times as "Sat Dec 30 1899 00:36:36 GMT-0600 (GMT-06:00)" +- however much time is being passed in
     if(format == 'time'){
-      let valueDate = new Date(value);
-      let minutes = (valueDate.getHours() * 60) + valueDate.getMinutes() - 36;
-      let seconds = valueDate.getSeconds() - 36;
+      const valueDate = new Date(value);
+      const minutes = (valueDate.getHours() * 60) + valueDate.getMinutes() - 36;
+      const seconds = valueDate.getSeconds() - 36;
       return minutes + seconds / 60;
     }
     if(format == 'number'){
