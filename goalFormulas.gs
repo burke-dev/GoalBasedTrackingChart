@@ -1,16 +1,16 @@
 // input is the raw data and outputs the data as percentages
-function dataAsPercentage(goalArray, rawDataArray){
-  const formattedData = getFormattedData(goalArray, rawDataArray);
+function getDataAsPercentage(goalArray, rawDataArray){
+  const formattedData = getRawFormattedData(goalArray, rawDataArray);
   const valuesAsPercentage = getEntriesAsPercentageOfGoals(formattedData);
 
   return valuesAsPercentage;
 }
 
 // input is the raw data and outputs data in weekly intervals (Sundays)
-function formatRawData(goalArray, rawDataArray){
-  const formattedData = getFormattedData(goalArray, rawDataArray);
+function getFormattedData(goalArray, rawDataArray){
+  const formattedData = getRawFormattedData(goalArray, rawDataArray);
 
-  return formattedData.filledEntries;
+  return formattedData.outputEntries;
 }
 
 // used for debugging - it converts the raw data in the spreadsheet into an array of arrays - paste into the empty array of "rawDataArray"
@@ -19,29 +19,45 @@ function formatRawDataForExport(rawDataArray){
   let emptyRow;
   return rawDataArray.map((row, i) => {
     const allEntries = String(row).split(",").map(entry => `"${entry}"`);
-    if(Array.isArray(allEntries)){
-      if(i == 0){
-        emptyRow = allEntries.map(_ => `""`);
-      }
-      const rowIsNotEmpty = allEntries.filter(n => n != '\"\"').join('') != '';
-      if(rowIsNotEmpty){
-        return `[${allEntries.join(',')}],`;
-      }
+    if(i == 0){
+      emptyRow = allEntries.map(_ => `""`);
     }
-    return null;
+    const rowIsNotEmpty = allEntries.filter(n => n != '\"\"').join('') != '';
+    return rowIsNotEmpty
+      ? `[${allEntries.join(',')}],`
+      : null;
   }).filter(n => n).concat(`[${emptyRow.join(',')}]`);
 }
 
 // these are internal functions and are not used by the users
-function getFormattedData(goalArray, rawDataArray){
+function getRawFormattedData(goalArray, rawDataArray){
   const goalData = getGoalData(goalArray);
   const headersAndEntriesObj = getHeadersAndEntries(rawDataArray);
-  const minMax = minMaxOfEachEntry(headersAndEntriesObj.entries, goalData);
   const dateRange = getDateRange(headersAndEntriesObj.entries, goalData);
-  const mergedArrays = mergedRangeAndMinMax(minMax, dateRange);
-  const filledEntries = fillSingleEmptyEntry(headersAndEntriesObj.headers, mergedArrays);
+  peakOfEachValueByWeek(headersAndEntriesObj.entries, goalData);
+  fillGapsInEntriesData(headersAndEntriesObj.entries, dateRange);
+  fillSingleEmptyEntry(headersAndEntriesObj.entries);
+  const outputEntries = convertBackToObject(headersAndEntriesObj);
   
-  return { filledEntries, goalData };
+  return { outputEntries, goalData };
+}
+
+function convertBackToObject(headersAndEntriesObj){
+  return [headersAndEntriesObj.headers.map(header => header.title)].concat(Object.keys(headersAndEntriesObj.entries).map(key => {
+    let entry = headersAndEntriesObj.entries[key];
+    let row = [];
+    Object.keys(entry).forEach(e => {
+      if(e == 'sunday'){
+        row.push(slashedDate(entry[e]));
+      }
+      if(e == 'values'){
+        Object.keys(entry[e]).forEach(z => {
+          row.push(entry[e][z]);
+        });
+      }
+    });
+    return row;
+  }));
 }
 
 function getGoalData(goalArray){
@@ -70,7 +86,7 @@ function getGoalData(goalArray){
 function getHeadersAndEntries(rawEntries){
   if(Array.isArray(rawEntries)){
     let headers = [];
-    let entries = [];
+    let entries = {};
     rawEntries.forEach((entryRow, i) => {
       if(i == 0){
         entryRow.forEach(title => {
@@ -78,92 +94,114 @@ function getHeadersAndEntries(rawEntries){
         });
         return;
       }
-      let ind = entries.map((entry, j) => {
-        const entryDate = getSundayOfWeek(entry.date);
-        const rowDate = getSundayOfWeek(entryRow[0]);
-        return slashedDate(entryDate) == slashedDate(rowDate) ? `${j}` : null;
-      }).filter(n => n).map(n => Number(n))[0] ?? null;
-
-      if(ind == null){
-        let date;
+      
+      let jKey = Object.keys(entries).map(key => key === getDateTitle(entryRow[0]) ? key : null ).filter(n => n)[0] ?? null;
+      if(jKey === null){
+        let sunday;
         let values = {};
         entryRow.forEach((data, j) => {
           if(j == 0){
-            date = getSundayOfWeek(data);
+            sunday = getSundayOfWeek(data);
             return;
           }
           values[headers[j].hiddenTitle] = [data];
         });
-        if(date != null){
-          entries.push({date, values});
+        if(sunday != null){
+          const dateTitle = getDateTitle(sunday);
+          entries[dateTitle] = {sunday, values};
         }
         return;
       }
-      Object.keys(entries[ind].values).forEach((val, j) => {
-        entries[ind].values[val].push(entryRow[j + 1]);
+      Object.keys(entries[jKey].values).forEach((val, j) => {
+        entries[jKey].values[val].push(entryRow[j + 1]);
       });
     });
     return { headers, entries };
   }
 }
 
-function minMaxOfEachEntry(entries, goalData){
-  return entries.map(entry => {
-    return [entry.date].concat(Object.keys(entry.values).map(key => addVal(entry.values[key], goalData[key])));
+function getDateTitle(date){
+  if(dateIsValid(date)){
+    let options = { year: '2-digit', month: '2-digit', day: '2-digit' };
+    date = getSundayOfWeek(date).toLocaleDateString("en-US", options);
+    let splitDate = date.split("/");
+    return `${splitDate[2]}${splitDate[0]}${splitDate[1]}`;
+  }
+  return null;
+}
+
+function peakOfEachValueByWeek(entries, goalData){
+  Object.keys(entries).forEach(key => {
+    let entry = entries[key];
+    Object.keys(entry.values).forEach(k => {
+      entry.values[k] = pushPeakValueForWeek(entry.values[k], goalData[k]);
+    });
   });
 }
 
 //gets the range of all the entries to fill in any gaps for the output data
 function getDateRange(cleanedEntries, goalData){
-  const sortedDateRange = cleanedEntries.map(entry => entry.date).sort((date1, date2) => date1 - date2);
+  const sortedDateRange = Object.keys(cleanedEntries).map(key => cleanedEntries[key].sunday).sort((date1, date2) => date1 - date2);
   let currentDate = sortedDateRange[0];
   const lastDate = sortedDateRange.reverse()[0];
-  const emptyValues = Object.keys(goalData).map(_ => "");
+  const emptyValues = {};
+  Object.keys(goalData).forEach(key => {
+    if(key != 'dateData') {
+      emptyValues[`${key}`] = "";
+    }
+  });
 
-  let range = [[currentDate, ...emptyValues]];
+  let range = {
+    [`${getDateTitle(currentDate)}`]: dateRangeObject(currentDate, emptyValues)
+  };
   while(new Date(currentDate) < new Date(lastDate)){
     let tempDate = new Date(currentDate.valueOf());
     tempDate.setDate(tempDate.getDate() + 7);
     currentDate = tempDate;
-    range.push([currentDate, ...emptyValues]);
+    range[`${getDateTitle(currentDate)}`] = dateRangeObject(currentDate, emptyValues);
   }
   return range;
 }
 
-function mergedRangeAndMinMax(minMax, dateRange){
-  return dateRange.map(date => {
-    const i = minMax.map((m, j) => (slashedDate(date[0]) == slashedDate(m[0])) ? `${j}`: null ).filter(n => n).map(n => Number(n))[0] ?? null;
-    return i != null ? minMax[i] : date;
+function dateRangeObject(sunday, values){
+  return { sunday, values };
+}
+
+function fillGapsInEntriesData(entries, dateRange){
+  Object.keys(dateRange).forEach(date => {
+    let doesNotcontainThisDate = !(entries[date] ?? false);
+    if(doesNotcontainThisDate){
+      entries[date] = dateRange[date];
+    }
   });
 }
 
-function fillSingleEmptyEntry(headers, mergedArrays){
-  const len = mergedArrays.length - 1;
-  const filledEmpties = mergedArrays.map((mergedEntry, i) => {
-    if(i > 0 && i < len){
-      return mergedEntry.map((entry, j) => {
-        if(j > 0 && entry == ''){
-          const prev = mergedArrays[i - 1][j];
-          const next = mergedArrays[i + 1][j];
-          return getAdjacentValue(prev, next);
+function fillSingleEmptyEntry(entries){
+  let allKeys = Object.keys(entries);
+  allKeys.forEach((_, i) => {
+    let lastEntry = Object.keys(entries).length - 1;
+    if(i > 0 && i < lastEntry){
+      Object.keys(entries[allKeys[i]].values).forEach(x => {
+        let entry = entries[allKeys[i]].values[x];
+        if(entry == ''){
+          let prev = entries[allKeys[i - 1]].values[x];
+          let next = entries[allKeys[i + 1]].values[x];
+          entries[allKeys[i]].values[x] = getValueIfEmpty(prev, next);
         }
-        return entry;
       });
     }
-    return mergedEntry.map(entry => entry != 0 ? entry : '' );
   });
-  return [headers.map(header => header.title)].concat(filledEmpties);
 }
 
 function getEntriesAsPercentageOfGoals(formattedData){
-  if(Array.isArray(formattedData.filledEntries)){
-    let headers = [];
-    return formattedData.filledEntries.map((entry, i) => {
+  if(Array.isArray(formattedData.outputEntries)){
+    let headerKeys = [];
+    return formattedData.outputEntries.map((entry, i) => {
       if(Array.isArray(entry)){
         return entry.map((data, j) => {
           // i == 0 => column header titles
           if(i == 0){
-            headers.push(formatHiddenTitle(data));
+            headerKeys.push(formatHiddenTitle(data));
           }
           // j == 0 => row date
           if(i != 0 && j != 0){
@@ -172,9 +210,9 @@ function getEntriesAsPercentageOfGoals(formattedData){
               return '';
             }
             if(data != null){
-              let goal = formattedData.goalData[headers[j]];
-              let start = formatValue(goal.format, goal.start);
-              let end = formatValue(goal.format, goal.end);
+              let goal = formattedData.goalData[headerKeys[j]];
+              let start = convertValueToNumberByFormat(goal.format, goal.start);
+              let end = convertValueToNumberByFormat(goal.format, goal.end);
               return (start - data)/(start - end);
             }
             return 0;
@@ -198,22 +236,22 @@ function getGoalDetails(goalData){
   return goals;
 }
 
-function addVal(allValues, goalDetails){
+function pushPeakValueForWeek(allValues, goalDetails){
   let removedEmptyValues = allValues.sort().filter(n => n == null || n != '');
   if(removedEmptyValues.length == 0){
     return "";
   }
   if(removedEmptyValues.length == 1){
-    return formatValue(goalDetails.format, removedEmptyValues[0]);
+    return convertValueToNumberByFormat(goalDetails.format, removedEmptyValues[0]);
   }
   let sortedValues = goalDetails.isDescending
     ? removedEmptyValues
     : removedEmptyValues.reverse();
-  return formatValue(goalDetails.format, sortedValues[0]);
+  return convertValueToNumberByFormat(goalDetails.format, sortedValues[0]);
 }
 
 function getSundayOfWeek(rawDate){
-  if(rawDate.length != 0){
+  if(dateIsValid(rawDate)){
     const date = new Date(rawDate);
     const setToSunday = date.getDate() - date.getDay();
     return new Date(date.setDate(setToSunday));
@@ -221,6 +259,7 @@ function getSundayOfWeek(rawDate){
   return null;
 }
 
+// if the goal start value > end then it isDescending -- if it is true, then the lowest value will be used for the weekly results
 function getIsDescending(format, start, end){
   if(format == 'date' || format == 'time'){
     return new Date(start) > new Date(end);
@@ -232,8 +271,9 @@ function getIsDescending(format, start, end){
   return false;
 }
 
-function formatValue(format, value){
+function convertValueToNumberByFormat(format, value){
   if(value !== ''){
+    // Google Sheets stores Times as "Sat Dec 30 1899 00:36:36 GMT-0600 (GMT-06:00)" +- however much time is being passed in
     if(format == 'time'){
       let valueDate = new Date(value);
       let minutes = (valueDate.getHours() * 60) + valueDate.getMinutes() - 36;
@@ -248,15 +288,17 @@ function formatValue(format, value){
   return '';
 }
 
-function formatHiddenTitle(str) {
+function getCamelCase(str){
   return str
-      .replace(/[^\w\s]/gi, '')
-      .replace(/\s(.)/g, a => a.toUpperCase())
-      .replace(/\s/g, '')
-      .replace(/^(.)/, b => b.toLowerCase())
-    +"Data";
+    .replace(/[^\w\s]/gi, '')                 // remove special characters
+    .replace(/\s(.)/g, a => a.toUpperCase())  // capitalize the first letter of each word
+    .replace(/\s/g, '')                       // remove spaces
+    .replace(/^(.)/, b => b.toLowerCase());   // set first letter to lower case
 }
 
-const getAdjacentValue = (prev, next) => (prev != "" && next != "") ? (prev + next) / 2 : "";
-const slashedDate = (date) => new Date(date).toLocaleDateString("en-US");
+// input "Raw Title" => output "rawTitleData"
+const formatHiddenTitle = (str) => `${getCamelCase(str)}Data`;
+const slashedDate = (date) => dateIsValid(date) ? new Date(date).toLocaleDateString("en-US") : null;
+const dateIsValid = (date) => new Date(date) != 'Invalid Date';
+const getValueIfEmpty = (prev, next) => (prev != "" && next != "") ? (prev + next) / 2 : "";
 const getGoalDateRange = (value, format) => format == 'date' ? getSundayOfWeek(value) : value;
