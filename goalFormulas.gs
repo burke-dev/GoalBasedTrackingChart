@@ -1,16 +1,54 @@
+function getSingleGoalProgressComparison(goalArray, rawDataArray, goalName){
+  const goalKey = formatHiddenTitle(goalName);
+  const formattedData = getRawFormattedData(goalArray, rawDataArray);
+  const entries = formattedData.headersAndEntriesObj.entries;
+  const singleGoal = getProgressAsObject(entries, formattedData.goalData, goalKey, goalName);
+
+  return singleGoal;
+}
+
+function getProgressAsObject(entries, myGoal, goalKey, goalName){
+  myGoal = myGoal[goalKey] ?? null;
+  if(myGoal !== null){
+    const totalEntries = Object.keys(entries).length - 1;
+    return [[`${capitalizeEachTitleWord(goalName)} Projection`], ["Date", "Results", "Projection"]].concat(
+      Object.keys(entries).map((_, i, entriesAsArray) => {
+        return getSingleGoalProgressRow(entries, i, totalEntries, myGoal, goalKey, entriesAsArray);
+      })
+    );
+  }
+  return `Unknown Goal Value - ${goalName ?? "?"}`;
+}
+
+function getSingleGoalProgressRow(entries, i, totalEntries, myGoal, goalKey, entriesAsArray){
+  const nextKey = entriesAsArray[i + 1] ?? null;
+  const nextValue = nextKey !== null ? entries[nextKey].values[goalKey] : '';
+
+  const entryKey = entriesAsArray[i];
+  const entry = entries[entryKey];
+  const start = convertValueToNumberByFormat(myGoal.format, myGoal.start);
+  const end = convertValueToNumberByFormat(myGoal.format, myGoal.end);
+  const value = entry.values[goalKey];
+  const percentage = value !== '' ? (start - value)/(start - end) : '';
+  const totalPercentage = nextValue === '' ?  i / totalEntries : '';
+  return [entry.sunday, percentage, totalPercentage];
+}
+
 // input is the raw data and outputs the data as percentages
 function getDataAsPercentage(goalArray, rawDataArray){
   const formattedData = getRawFormattedData(goalArray, rawDataArray);
-  const valuesAsPercentage = getEntriesAsPercentageOfGoals(formattedData);
+  const headersAndEntriesObj = getEntriesAsPercentageOfGoals(formattedData);
+  const outputEntries = convertBackToObject(headersAndEntriesObj);
 
-  return valuesAsPercentage;
+  return outputEntries;
 }
 
 // input is the raw data and outputs data in weekly intervals (Sundays)
 function getFormattedData(goalArray, rawDataArray){
   const formattedData = getRawFormattedData(goalArray, rawDataArray);
+  const outputEntries = convertBackToObject(formattedData.headersAndEntriesObj);
 
-  return formattedData.outputEntries;
+  return outputEntries;
 }
 
 // used for debugging - it converts the raw data in the spreadsheet into an array of arrays - paste into the empty array of "rawDataArray"
@@ -31,9 +69,8 @@ function getRawFormattedData(goalArray, rawDataArray){
   peakOfEachValueByWeek(headersAndEntriesObj.entries, goalData);
   fillGapsInEntriesData(headersAndEntriesObj.entries, dateRange);
   fillSingleEmptyEntry(headersAndEntriesObj.entries);
-  const outputEntries = convertBackToObject(headersAndEntriesObj);
   
-  return { outputEntries, goalData };
+  return { headersAndEntriesObj, goalData };
 }
 
 // the object sent returned to the spreadsheet
@@ -41,7 +78,7 @@ function convertBackToObject(headersAndEntriesObj){
   return [headersAndEntriesObj.headers.map(header => header.title)]
     .concat(Object.keys(headersAndEntriesObj.entries)
       .map(objectKey => {
-        let entryRow = headersAndEntriesObj.entries[objectKey];
+        const entryRow = headersAndEntriesObj.entries[objectKey];
         let row = [];
         Object.keys(entryRow).forEach(entryKey => {
           let value = entryRow[entryKey];
@@ -75,7 +112,7 @@ function getGoalData(goalArray){
     goalArray.forEach((goalRow, i) => {
       if(Array.isArray(goalRow)){
         if(i !== 0){
-          let key = goalRow[0].toLowerCase();
+          const key = getCamelCase(goalRow[0]);
           goalRow.forEach((q, j) => {
             if(q !== '' && j !== 0){
               goals[hiddenTitles[j]][key] = key === 'format' ? q.toLowerCase() : q;
@@ -94,7 +131,7 @@ function filterGoals(goals){
   Object.keys(goals).forEach(key => {
     const goal = goals[key];
 
-    let goalKeys = Object.keys(goal).map(x => x);
+    const goalKeys = Object.keys(goal).map(x => x);
     if(!goalKeys.includes('start') || !goalKeys.includes('end')){
       delete goals[key];
       return;
@@ -118,25 +155,25 @@ function getHeadersAndEntries(rawEntries){
         return;
       }
       
-      let eKey = Object.keys(entries).map(key => key === getDateTitle(entryRow[0]) ? key : null ).filter(n => n)[0] ?? null;
+      const eKey = Object.keys(entries).map(key => key === getDateTitle(entryRow[0]) ? key : null ).filter(n => n)[0] ?? null;
       if(eKey === null){
-        let values = {};
+        let rawValues = {};
         entryRow.forEach((data, j) => {
           if(j !== 0){
-            values[headers[j].hiddenTitle] = [data];
+            rawValues[headers[j].hiddenTitle] = [data];
           }
         });
         const sunday = getSundayOfWeek(entryRow[0]);
         if(sunday !== null){
           const dateTitle = getDateTitle(sunday);
-          entries[dateTitle] = {sunday, values};
+          entries[dateTitle] = {sunday, rawValues};
         }
         return;
       }
-      Object.keys(entries[eKey].values).forEach((valueKey, j) => {
+      Object.keys(entries[eKey].rawValues).forEach((valueKey, j) => {
         const entryValue = entryRow[j + 1] ?? '';
         if(entryValue !== ''){
-          entries[eKey].values[valueKey].push(entryValue);
+          entries[eKey].rawValues[valueKey].push(entryValue);
         }
       });
     });
@@ -157,8 +194,9 @@ function getDateTitle(date){
 function peakOfEachValueByWeek(entries, goalData){
   Object.keys(entries).forEach(entriesKey => {
     let entry = entries[entriesKey];
-    Object.keys(entry.values).forEach(valuesKey => {
-      entry.values[valuesKey] = pushPeakValueForWeek(entry.values[valuesKey], goalData[valuesKey]);
+    entries[entriesKey].values = {};
+    Object.keys(entry.rawValues).forEach(valuesKey => {
+      entry.values[valuesKey] = pushPeakValueForWeek(entry.rawValues[valuesKey], goalData[valuesKey]);
     });
   });
 }
@@ -207,50 +245,23 @@ function fillSingleEmptyEntry(entries){
 }
 
 function getEntriesAsPercentageOfGoals(formattedData){
-  if(Array.isArray(formattedData.outputEntries)){
-    let headerKeys = [];
-    return formattedData.outputEntries.map((entry, i) => {
-      if(Array.isArray(entry)){
-        return entry.map((data, j) => {
-          // i === 0 => column header titles
-          if(i === 0){
-            headerKeys.push(formatHiddenTitle(data));
-          }
-          // j === 0 => row date
-          if(i !== 0 && j !== 0){
-            data = data ?? null;
-            if(data === ''){
-              return '';
-            }
-            if(data !== null){
-              let goal = formattedData.goalData[headerKeys[j]];
-              let start = convertValueToNumberByFormat(goal.format, goal.start);
-              let end = convertValueToNumberByFormat(goal.format, goal.end);
-              return (start - data)/(start - end);
-            }
-            return 0;
-          }
-          return data;
-        });
+  Object.keys(formattedData.headersAndEntriesObj.entries).forEach(entriesKey => {
+    let entries = formattedData.headersAndEntriesObj.entries[entriesKey];
+    Object.keys(entries.values).forEach((key, j) => {
+      let goalData = formattedData.goalData[key];
+      let value = entries.values[key];
+      if(value != ''){
+        let start = convertValueToNumberByFormat(goalData.format, goalData.start);
+        let end = convertValueToNumberByFormat(goalData.format, goalData.end);
+        formattedData.headersAndEntriesObj.entries[entriesKey].values[key] = (start - value)/(start - end);
       }
     });
-  }
-}
-
-function getGoalDetails(goalData){
-  let goals = {};
-  Object.keys(goalData).forEach(key => {
-    const goal = goalData[key];
-    goals[key] = {
-      format: goal.format,
-      isDescending: getIsDescending(goal.format, goal.start, goal.end)
-    };
   });
-  return goals;
+  return formattedData.headersAndEntriesObj;
 }
 
 function pushPeakValueForWeek(allValues, goalDetails){
-  let removedEmptyValues = allValues.sort().filter(n => n === null || n !== '');
+  let removedEmptyValues = allValues.sort().filter(n => n !== null || n !== '');
   if(removedEmptyValues.length === 0){
     return "";
   }
@@ -307,6 +318,12 @@ function getCamelCase(str){
     .replace(/\s(.)/g, a => a.toUpperCase())  // capitalize the first letter of each word
     .replace(/\s/g, '')                       // remove spaces
     .replace(/^(.)/, b => b.toLowerCase());   // set first letter to lower case
+}
+
+function capitalizeEachTitleWord(rawString){
+  return rawString.split(' ').map(value => {
+    return value.split('').map((v, i) => i === 0 ? v.toUpperCase() : v.toLowerCase() ).join('');
+  }).join(' ');
 }
 
 function getValueByFormat(format, value){
