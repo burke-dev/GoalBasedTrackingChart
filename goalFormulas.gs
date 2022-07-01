@@ -250,7 +250,7 @@ function getGoalDetails(goalData){
 }
 
 function pushPeakValueForWeek(allValues, goalDetails){
-  let removedEmptyValues = allValues.sort().filter(n => n === null || n !== '');
+  let removedEmptyValues = allValues.sort().filter(n => n !== null || n !== '');
   if(removedEmptyValues.length === 0){
     return "";
   }
