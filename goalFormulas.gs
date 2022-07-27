@@ -1,118 +1,135 @@
-// input is the raw data and outputs the data as percentages
-function getDataAsPercentage(goalArray, rawDataArray){
-  const formattedData = getRawFormattedData(goalArray, rawDataArray);
+// used for debugging - it converts the raw data in the spreadsheet into an array of arrays - paste into the empty array of "rawDataArray"
+function RawData(rawDataArray){
+  return rawDataArray;
+}
 
-  if(formattedData){
-    const headersAndEntriesObj = getEntriesAsPercentageOfGoals(formattedData);
-    return convertBackToObject(headersAndEntriesObj);
-  }
-  return "getDataAsPercentage failed getRawFormattedData()";
+// input is the raw data and outputs the data as percentages
+function Percentage(rawDataArray, goalArray){
+  const formattedData = _getRawFormattedData(rawDataArray, goalArray, []);
+  const allData = _getEntriesAsPercentageOfGoals(formattedData.allEntries, formattedData.goalData);
+  const getPercentage = _convertDataBackToArrays(allData);
+  return getPercentage;
 }
 
 // input is the raw data and outputs data in weekly intervals (Sundays)
-function getFormattedData(goalArray, rawDataArray){
-  const formattedData = getRawFormattedData(goalArray, rawDataArray);
-
-  return formattedData
-    ? convertBackToObject(formattedData.headersAndEntriesObj)
-    : "getFormattedData failed getRawFormattedData()";
+function Formatted(rawDataArray, goalArray){
+  const formattedData = _getRawFormattedData(rawDataArray, goalArray, []);
+  const getFormatted = _convertDataBackToArrays(formattedData.allEntries);
+  return getFormatted;
 }
 
-// input goal and rawData arrays as well as a string for the goal the user would like to chart
-function getSingleGoalProgressComparison(goalArray, rawDataArray, goalName){
-  const formattedData = getRawFormattedData(goalArray, rawDataArray);
-
-  return formattedData
-    ? getProgressAsObject(formattedData.headersAndEntriesObj.entries, formattedData.goalData, goalName)
-    : "getSingleGoalProgressComparison failed getRawFormattedData()";
+// input is same as the others, but adds the param for a single goal -- to chart the progress being made and projecting the results to the end date
+function GoalProgress(rawDataArray, goalArray, special){
+  const formattedData = _getRawFormattedData(rawDataArray, goalArray, [special]);
+  const getProgress = _getSingleGoalProgressComparison(formattedData.allEntries.dateRanges, formattedData.goalData, [special]);
+  return getProgress[0];
 }
 
-// used for debugging - it converts the raw data in the spreadsheet into an array of arrays - paste into the empty array of "rawDataArray"
-function formatRawDataForExport(rawDataArray){
-  // an empty row of data appended to the end of the arrays
-  const emptyRow = rawDataArray[0].map(_ => '""').join(',');
-  return rawDataArray.map(row => {
-    const joinedRowEntries = String(row).split(",").map(entry => `"${entry}"`).join(',');
-    return `[${joinedRowEntries}],`
-  }).filter(n => isRowNotEmpty(n)).concat(`[${emptyRow}]`);
+// converts the raw data from the spreadsheet to a usable form
+function _getRawFormattedData(rawDataArray, goalArray, specials){
+  const goalData = _getGoalData(goalArray);
+  const allEntries = _getHeadersAndDateRanges(goalData, rawDataArray, specials);
+  _peakOfEachValueByWeek(allEntries.dateRanges, goalData);
+  _fillSingleEmptyEntry(allEntries.dateRanges);
+  _fillSpecialObjectsWithPeakValues(allEntries.dateRanges);
+
+  return { allEntries, goalData };
 }
 
-// these are internal functions and are not used by the users
-function getRawFormattedData(goalArray, rawDataArray){
-  const goalData = getGoalData(goalArray);
-  const headersAndEntriesObj = getHeadersAndEntries(rawDataArray);
-
-  if(headersAndEntriesObj){
-    const dateRange = getDateRange(goalData);
-    peakOfEachValueByWeek(headersAndEntriesObj.entries, goalData);
-    fillGapsInEntriesData(headersAndEntriesObj.entries, dateRange);
-    fillSingleEmptyEntry(headersAndEntriesObj.entries);
-    
-    return { headersAndEntriesObj, goalData };
-  }
-  return false;
+// input is same as the others, but adds the param for a single goal -- to chart the progress being made and projecting the results to the end date
+function _getSingleGoalProgressComparison(dateRanges, goalData, goalNames){
+  return goalNames.map(goalName => {
+    const goalKey = _formatHiddenTitle(goalName);
+    const myGoal = goalData[goalKey] ?? false;
+    if(myGoal){
+      let dateRange = dateRanges[goalKey] ?? false;
+      if(!dateRange){
+        return;
+      }
+      let tempObj = _fillAllCentralEmptyValues(dateRange);
+      return [
+          [`${_capitalizeEachTitleWord(goalName)} Projection`], 
+          ["Date", "Results", "Projection"]
+        ].concat(Object.keys(dateRange)
+          .map(key => {
+            return {
+              date: dateRange[key].sunday,
+              value: dateRange[key].value
+            }
+          })
+          .map((entry, i) => {
+            const val = i < tempObj.lumpedValues.length - 1 ? tempObj.lumpedValues[i]: entry;
+            return _getSingleGoalProgressRow(val, i, tempObj.details, myGoal);
+          })
+        );
+    }
+    console.error(`Unknown Goal Value - ${goalName ?? "?"}`);
+    return null;
+  }).filter(n => n);
 }
+
+// the rest are internal functions and are not used by the users
 
 // the object sent returned to the spreadsheet
-function convertBackToObject(headersAndEntriesObj){
-  try{
-    return [headersAndEntriesObj.headers.map(header => header.title)]
-      .concat(Object.keys(headersAndEntriesObj.entries)
-        .map(objectKey => {
-          const entryRow = headersAndEntriesObj.entries[objectKey];
-          let row = [];
-          Object.keys(entryRow).forEach(entryKey => {
-            let value = entryRow[entryKey];
-            if(entryKey === 'sunday'){
-              row.push(value);
-            }
-            if(entryKey === 'values'){
-              Object.keys(entryRow[entryKey]).forEach(valueKey => {
-                row.push(value[valueKey]);
-              });
-            }
-          });
-          if(isDateValid(row[0])){
-            return row;
+function _convertDataBackToArrays(allEntries){
+  const fullTime = allEntries.dateRanges.fullTime;
+  return [allEntries.headers.map(header => header.title)]
+    .concat(Object.keys(fullTime)
+      .map(objectKey => {
+        const entryRow = fullTime[objectKey];
+        let row = [entryRow.sunday];
+        Object.keys(entryRow.values).forEach(entryKey => {
+          if(entryKey !== 'dateData'){
+            row.push(entryRow.values[entryKey]);
           }
-        })
-      );
-  } catch(e){
-    console.log(e);
-    return `convertBackToObject()\r\n${e}`;
-  }  
-}
+        });
+        return _isDateValid(row[0]) ? row : null;
+      })
+      .filter(n => n)
+    );
+  }
 
-function getGoalData(goalArray){
+// converts to users goals into a usable object
+function _getGoalData(goalArray){
   if(Array.isArray(goalArray)){
     let goals = {};
     let hiddenTitles = [];
-
-    goalArray[0].forEach(title => {
-      const hiddenTitle = formatHiddenTitle(title);
-      goals[hiddenTitle] = { title };
-      hiddenTitles.push(hiddenTitle);
-    });
-
     goalArray.forEach((goalRow, i) => {
       if(Array.isArray(goalRow)){
-        if(i !== 0){
-          const key = getCamelCase(goalRow[0]);
-          goalRow.forEach((q, j) => {
-            if(q !== '' && j !== 0){
-              goals[hiddenTitles[j]][key] = key === 'format' ? q.toLowerCase() : q;
+        if(i === 0){
+          const tempObj = _getGoalsAndHiddenTitles(goalRow);
+          goals = tempObj.goals;
+          hiddenTitles = tempObj.hiddenTitles;
+          return;
+        }
+        const key = _getCamelCase(goalRow[0]) ?? '';
+        if(key !== ''){
+          goalRow.forEach((rowEntry, j) => {
+            if(j !== 0){
+              goals[hiddenTitles[j]][key] = key === 'format' ? rowEntry.toLowerCase() : rowEntry;
             }
           });
         }
       }
     });
-    filterGoals(goals);
-
+    _filterGoals(goals);
+    
     return goals;
   }
 }
 
-function filterGoals(goals){
+function _getGoalsAndHiddenTitles(goalRow){
+  let goals = {};
+  let hiddenTitles = goalRow.map(title => {
+    const hiddenTitle = _formatHiddenTitle(title);
+    goals[hiddenTitle] = { title };
+    return hiddenTitle;
+  });
+  return { goals, hiddenTitles };
+}
+
+// removes goal values from consideration if there is no start or end goals and determines whether the goal is > or < than the start => isDescending
+function _filterGoals(goals){
   Object.keys(goals).forEach(key => {
     const goal = goals[key];
 
@@ -122,199 +139,262 @@ function filterGoals(goals){
       return;
     }
 
-    const start = getValueByFormat(goal.format, goal.start);
-    const end = getValueByFormat(goal.format, goal.goal);
-    goals[key].isDescending = getIsDescending(goal.format, start, end);
+    const start = _getValueByFormat(goal.format, goal.start);
+    const end = _getValueByFormat(goal.format, goal.goal);
+    goals[key].isDescending = _getIsDescending(goal.format, start, end);
   });
 }
 
-function getHeadersAndEntries(rawEntries){
+function _getHeadersAndDateRanges(goalData, rawEntries, specials){
   if(Array.isArray(rawEntries)){
     let headers = [];
-    let entries = {};
+    let dateRanges = _getFullTimeDateRanges(goalData, specials);
     rawEntries.forEach((entryRow, i) => {
-      if(i === 0){
-        entryRow.forEach(title => {
-          headers.push({ title, hiddenTitle: formatHiddenTitle(title) });
-        });
-        return;
-      }
-      
-      const eKey = Object.keys(entries).map(key => key === getDateTitle(entryRow[0]) ? key : null ).filter(n => n)[0] ?? null;
-      if(eKey === null){
-        let rawValues = {};
-        entryRow.forEach((data, j) => {
-          if(j !== 0){
-            rawValues[headers[j].hiddenTitle] = [data];
-          }
-        });
-        const sunday = getSundayOfWeek(entryRow[0]);
-        if(sunday !== null){
-          const dateTitle = getDateTitle(sunday);
-          entries[dateTitle] = {sunday, rawValues, values: {}};
+      entryRow.forEach((data, j) => {
+        if(i === 0){
+          const hiddenTitle = _formatHiddenTitle(data);
+          headers.push({ title: data, hiddenTitle });
+          Object.keys(dateRanges.fullTime).forEach(rangesKey => {
+            dateRanges.fullTime[rangesKey].values[hiddenTitle] = ''
+            dateRanges.fullTime[rangesKey].rawValues[hiddenTitle] = []
+          });
+          return;
         }
-        return;
-      }
-      Object.keys(entries[eKey].rawValues).forEach((valueKey, j) => {
-        const entryValue = entryRow[j + 1] ?? '';
-        if(entryValue !== ''){
-          entries[eKey].rawValues[valueKey].push(entryValue);
+        if(j !== 0 && data !== ''){
+          const sunday = _getSundayOfWeek(entryRow[0]);
+          let sundayTitle = _getDateTitle(sunday);
+          if(dateRanges.fullTime[sundayTitle] ?? false){
+            dateRanges.fullTime[sundayTitle].rawValues[headers[j].hiddenTitle].push(data);
+          }
         }
       });
     });
 
-    return { headers, entries };
+    return { headers, dateRanges };
   }
-  return false;
 }
 
-function getDateTitle(date){
-  if(isDateValid(date)){
-    let options = { year: '2-digit', month: '2-digit', day: '2-digit' };
-    date = getSundayOfWeek(date).toLocaleDateString("en-US", options);
-    let splitDate = date.split("/");
+//gets the range of all the entries from start to goal
+function _getFullTimeDateRanges(goalData, specials){
+  specials = specials.filter(special => special && special.length);
+  const dateRanges = _getSpecialEnds(goalData, specials);
+  
+  const startDateMidnight = new Date(goalData.dateData.start).setHours(0,0,0,0);
+  let currentDate = new Date(startDateMidnight);
+  let tempDates = { [_getDateTitle(currentDate)]: _addDateEntry(currentDate) };
+  while( _sundayIsLessThanEndDate(currentDate, dateRanges.fullTime.end) ){
+    let tempDate = new Date(currentDate.valueOf());
+    tempDate.setDate(tempDate.getDate() + 7);
+    currentDate = tempDate;
+    tempDates[_getDateTitle(currentDate)] = _addDateEntry(currentDate);
+  }
+  dateRanges.fullTime = tempDates;
+
+  return dateRanges;
+}
+
+function _getSpecialEnds(goalData, specialNames){
+    let outputObj = {
+      "fullTime": {
+        "end": goalData.dateData.end
+      }
+    }
+    if(specialNames.length){
+      outputObj.end = {};
+      specialNames.forEach(goalName => {
+        const hiddenTitle = _formatHiddenTitle(goalName);
+        const specialEnd = goalData[hiddenTitle].specialEndDate;
+        const goalEnd = _getCamelCase(goalName);
+        outputObj.end[goalEnd] = _isDateValid(specialEnd) ? specialEnd : goalData.dateData.end;
+      });
+    }
+    return outputObj;
+}
+
+const _sundayIsLessThanEndDate = (currentDate, endDate) => {
+  // some times Google Sheets will add an hour to the date and cause the comparison to fail on the last date
+  let current = _slashedDate(currentDate);
+  let end = _slashedDate(endDate);
+  return new Date(current) <= new Date(end);
+};
+
+function _getDateTitle(date){
+  if(_isDateValid(date)){
+    const options = { year: '2-digit', month: '2-digit', day: '2-digit' };
+    const splitDate = _getSundayOfWeek(date).toLocaleDateString("en-US", options).split("/");
     return `${splitDate[2]}-${splitDate[0]}-${splitDate[1]}`;
   }
   return null;
 }
 
-function peakOfEachValueByWeek(entries, goalData){
-  Object.keys(entries).forEach(entriesKey => {
-    let entry = entries[entriesKey];
-    Object.keys(entry.rawValues).forEach(valuesKey => {
-      entry.values[valuesKey] = pushPeakValueForWeek(entry.rawValues[valuesKey], goalData[valuesKey]);
+//returns the "best" value for each week: low for isDescending, high for !isDescending
+function _peakOfEachValueByWeek(dateRanges, goalData){
+  Object.keys(dateRanges.fullTime).forEach(entriesKey => {
+    let entry = dateRanges.fullTime[entriesKey];
+    Object.keys(dateRanges.fullTime[entriesKey].values).forEach(vKey => {
+      entry.values[vKey] = _pushPeakValueForWeek(entry.rawValues[vKey], goalData[vKey]);
     });
   });
 }
 
-//gets the range of all the entries to fill in any gaps for the output data
-function getDateRange(goalData){
-  let currentDate = goalData.dateData.start;
-  const emptyValues = {};
-  Object.keys(goalData).forEach(key => { emptyValues[key] = ""; });
-
-  let range = {
-    [getDateTitle(currentDate)]: { sunday: currentDate, values: emptyValues }
-  };
-  while(new Date(currentDate) < new Date(goalData.dateData.end)){
-    let tempDate = new Date(currentDate.valueOf());
-    tempDate.setDate(tempDate.getDate() + 7);
-    currentDate = tempDate;
-    range[getDateTitle(currentDate)] = { sunday: currentDate, values: emptyValues };
-  }
-  return range;
-}
-
-function fillGapsInEntriesData(entries, dateRange){
-  Object.keys(dateRange).forEach(date => {
-    const entriesDoesNotContainThisDate = !(entries[date] ?? false);
-    if(entriesDoesNotContainThisDate){
-      entries[date] = dateRange[date];
-    }
-  });
-}
-
-function fillSingleEmptyEntry(entries){
-  let allKeys = Object.keys(entries);
-  allKeys.forEach((entryKey, i) => {
-    let lastEntry = Object.keys(entries).length - 1;
+// returns the average value between two valid values -- if weight in week[3] === '' and (week[2] == 200 && week[4] === 205) it will return week[3] === 202.5 but only if [2] and [4] are valid
+function _fillSingleEmptyEntry(entries){
+  const allKeys = Object.keys(entries.fullTime);
+  const lastEntry = allKeys.length - 1;
+  allKeys.forEach((_, i) => {
     if(i > 0 && i < lastEntry){
-      Object.keys(entries[entryKey].values).forEach(valueKey => {
-        if(entries[entryKey].values[valueKey] === ''){
-          let prev = entries[allKeys[i - 1]].values[valueKey];
-          let next = entries[allKeys[i + 1]].values[valueKey];
-          entries[entryKey].values[valueKey] = getValueIfEmpty(prev, next);
+      let fullTime = entries.fullTime[allKeys[i]].values;
+      Object.keys(fullTime).forEach(valueKey => {
+        if(fullTime[valueKey] === ''){
+          let prev = entries.fullTime[allKeys[i - 1]].values[valueKey];
+          let next = entries.fullTime[allKeys[i + 1]].values[valueKey];
+          fullTime[valueKey] = _getValueIfEmpty(prev, next);
         }
       });
     }
   });
 }
 
-function getEntriesAsPercentageOfGoals(formattedData){
-  try{
-    Object.keys(formattedData.headersAndEntriesObj.entries).forEach(entriesKey => {
-      let entries = formattedData.headersAndEntriesObj.entries[entriesKey];
-      Object.keys(entries.values).forEach((key, j) => {
-        let goalData = formattedData.goalData[key];
-        let value = entries.values[key];
-        if(value != ''){
-          let start = convertValueToNumberByFormat(goalData.format, goalData.start);
-          let end = convertValueToNumberByFormat(goalData.format, goalData.end);
-          formattedData.headersAndEntriesObj.entries[entriesKey].values[key] = (start - value)/(start - end);
+function _fillSpecialObjectsWithPeakValues(dateRanges){
+  if(dateRanges.end){
+    Object.keys(dateRanges.end).forEach(key => {
+      const hiddenTitle = _formatHiddenTitle(key);
+      dateRanges[hiddenTitle] = {};
+      Object.keys(dateRanges.fullTime).forEach(date => {
+        const fullTime = dateRanges.fullTime[date];
+        const sunday = fullTime.sunday;
+        if(_sundayIsLessThanEndDate(sunday, dateRanges.end[key])){
+          dateRanges[hiddenTitle][_getDateTitle(sunday)] = { sunday, value: fullTime.values[hiddenTitle] };
         }
       });
     });
-    return formattedData.headersAndEntriesObj;
-  } catch(e){
-    console.log(e);
-    return `getEntriesAsPercentageOfGoals() failed \r\n${e}`;
+    delete dateRanges.end;
   }
 }
 
-function pushPeakValueForWeek(allValues, goalDetails){
-  let removedEmptyValues = allValues.sort().filter(n => n !== null || n !== '');
-  if(removedEmptyValues.length === 0){
+// returns the data as a percentage of the goal as opposed to the raw results
+function _getEntriesAsPercentageOfGoals(allEntries, goals){
+  Object.keys(allEntries.dateRanges).forEach(key => {
+    let dateRange = allEntries.dateRanges[key];
+    Object.keys(dateRange).forEach(entriesKey => {
+      const entries = dateRange[entriesKey].values ?? {};
+      Object.keys(entries).forEach(key => {
+        const goalData = goals[key];
+        const value = entries[key];
+        if(value != ''){
+          const start = _convertValueToNumberByFormat(goalData.format, goalData.start);
+          const end = _convertValueToNumberByFormat(goalData.format, goalData.end);
+          dateRange[entriesKey].values[key] = (start - value)/(start - end);
+        }
+      });
+    });
+  });
+  return allEntries;
+}
+
+// determines and returns the "best" value for each entry
+function _pushPeakValueForWeek(allValues, goalDetails){
+  if(allValues.length === 0){
     return "";
   }
-  if(removedEmptyValues.length === 1){
-    return convertValueToNumberByFormat(goalDetails.format, removedEmptyValues[0]);
+  if(allValues.length === 1){
+    return _convertValueToNumberByFormat(goalDetails.format, allValues[0]);
   }
   const sortedValues = goalDetails.isDescending
-    ? removedEmptyValues
-    : removedEmptyValues.reverse();
-  return convertValueToNumberByFormat(goalDetails.format, sortedValues[0]);
+    ? allValues
+    : allValues.reverse();
+  return _convertValueToNumberByFormat(goalDetails.format, sortedValues[0]);
 }
 
-function getProgressAsObject(entries, myGoal, goalName){
-  const goalKey = formatHiddenTitle(goalName);
-  myGoal = myGoal[goalKey] ?? null;
-  if(myGoal !== null){
-    const totalEntries = Object.keys(entries).length - 1;
-    return [[`${capitalizeEachTitleWord(goalName)} Projection`], ["Date", "Results", "Projection"]].concat(
-      Object.keys(entries).map((_, i, entriesAsArray) => {
-        return getSingleGoalProgressRow(entries, i, totalEntries, myGoal, goalKey, entriesAsArray);
-      })
-    );
+function _getSingleGoalProgressRow(val, i, details, myGoal){
+  const start = _convertValueToNumberByFormat(myGoal.format, myGoal.start);
+  const end = _convertValueToNumberByFormat(myGoal.format, myGoal.end);
+  let percentage = val.value !== '' ? (start - val.value)/(start - end) : '';
+  percentage = percentage >= 0 ? percentage : 0;
+  const totalPercentage = i >= details.lastIndex ?  i / details.totalEntries : '';
+  return [val.date, percentage, totalPercentage];
+}
+
+// fills all the empty values within a set of filled values
+// still very clunky and can be optimized
+function _fillAllCentralEmptyValues(entries){
+  const lastIndex = _getLastIndex(entries);
+  let lumpedValues = Object.keys(entries)
+    .map((key, i) => {
+      return { i, date: entries[key].sunday, value: entries[key].value }
+    })
+    .sort((a, b) => a.date - b.date)
+    .filter(a => a.i <= lastIndex)
+    .map((entry, i, allEntries) => _fillFilteredEmptyValues(entry, i, allEntries));
+  const totalEntries = Object.keys(entries).length - 1;
+  return { lumpedValues, details: {lastIndex , totalEntries} };
+}
+
+function _fillFilteredEmptyValues(entry, i, allEntries){
+  if(i === 0 && entry.value === ''){
+    entry.value = 0;
   }
-  return `Unknown Goal Value - ${goalName ?? "?"}`;
+  if(entry.value !== ''){
+    return entry;
+  }
+  let previous = allEntries[i - 1];
+  let nextValid = _getNextValidValue(allEntries, i);
+  if(previous.value === '' || nextValid.value === ''){
+    return entry;
+  }
+  let steps = nextValid.i - previous.i;
+  let diff = nextValid.value - previous.value - 1;
+  for(let z = 1; z < steps; z++){
+    let bIndex = previous.i + z;
+    let add = z * diff / steps;
+    allEntries[bIndex].value = previous.value + add;
+  }
+  return entry;
 }
 
-function getSingleGoalProgressRow(entries, i, totalEntries, myGoal, goalKey, entriesAsArray){
-  const nextKey = entriesAsArray[i + 1] ?? null;
-  const nextValue = nextKey !== null ? entries[nextKey].values[goalKey] : '';
-
-  const entryKey = entriesAsArray[i];
-  const entry = entries[entryKey];
-  const start = convertValueToNumberByFormat(myGoal.format, myGoal.start);
-  const end = convertValueToNumberByFormat(myGoal.format, myGoal.end);
-  const value = entry.values[goalKey];
-  const percentage = value !== '' ? (start - value)/(start - end) : '';
-  const totalPercentage = nextValue === '' ?  i / totalEntries : '';
-  return [entry.sunday, percentage, totalPercentage];
+function _getLastIndex(entries){
+  return Object.keys(entries)
+    .map((key, i) => entries[key].value !== '' ? [entries[key].sunday, i] : null)
+    .filter(n => n).sort((a, b) => b[0] - a[0])[0][1];
 }
 
-function getSundayOfWeek(rawDate){
-  if(isDateValid(rawDate)){
+function _getNextValidValue(all, i){
+  let localIndex = i;
+  const lastIndex = all.length - 1;
+  if(lastIndex > localIndex){
+    let nextValue = all[++localIndex].value;
+    while(nextValue === ''){
+      if(localIndex === lastIndex){
+        break;
+      }
+      nextValue = all[++localIndex].value;
+    }
+  }
+  return all[localIndex];
+}
+
+function _getSundayOfWeek(rawDate){
+  if(_isDateValid(rawDate)){
     const date = new Date(rawDate);
-    const setToSunday = date.getDate() - date.getDay();
-    return new Date(date.setDate(setToSunday));
+    const dateSetToSunday = date.getDate() - date.getDay();
+    return new Date(date.setDate(dateSetToSunday));
   }
   return null;
 }
 
 // if the goal start value > end then it isDescending -- if it is true, then the lowest value will be used for the weekly results
-function getIsDescending(format, start, end){
+function _getIsDescending(format, start, end){
   if(format === 'date' || format === 'time'){
     return new Date(start) > new Date(end);
   }
   if(format === 'number'){
     return Number(start) > Number(end);
   }
-  console.log(`Unknown format -> ${format ?? ''} // start ${start ?? ''} // end ${end ?? ''}`);
+  console.warn(`Unknown format -> ${format ?? ''} // start ${start ?? ''} // end ${end ?? ''}`);
   return false;
 }
 
-function convertValueToNumberByFormat(format, value){
+function _convertValueToNumberByFormat(format, value){
   if(value !== ''){
     // Google Sheets stores Times as "Sat Dec 30 1899 00:36:36 GMT-0600 (GMT-06:00)" +- however much time is being passed in
     if(format === 'time'){
@@ -326,12 +406,16 @@ function convertValueToNumberByFormat(format, value){
     if(format === 'number'){
       return Number(value);
     }
-    console.log(`Unknown format -> ${format} // value ${value}`);
+    console.error(`Unknown format -> ${format} // value ${value}`);
   }
   return '';
 }
 
-function getCamelCase(str){
+function _getCamelCase(str){
+  if(typeof str !== 'string'){
+    console.error(`_getCamelCase() error - str must be typeof string not -> ${(typeof str)} - ${str}`);
+    return '';
+  }
   return str
     .replace(/[^\w\s]/gi, '')                 // remove special characters
     .replace(/\s(.)/g, a => a.toUpperCase())  // capitalize the first letter of each word
@@ -339,22 +423,31 @@ function getCamelCase(str){
     .replace(/^(.)/, b => b.toLowerCase());   // set first letter to lower case
 }
 
-function capitalizeEachTitleWord(rawString){
-  return rawString.split(' ').map(value => {
-    return value.split('').map((v, i) => i === 0 ? v.toUpperCase() : v.toLowerCase() ).join('');
-  }).join(' ');
+function _capitalizeEachTitleWord(rawString) {
+  if(typeof rawString !== 'string'){
+    console.error(`_capitalizeEachTitleWord() error - str must be typeof string not -> ${(typeof rawString)} - ${rawString}`);
+    return '';
+  }
+  return rawString
+    .split(' ')
+    .map(value => value.toLowerCase().split('').map((v, i) => i === 0 ? v.toUpperCase() : v ).join(''))
+    .join(' ');
 }
 
-function getValueByFormat(format, value){
+function _getValueByFormat(format, value){
   if(format ?? false){
-    return format === 'date' ? getSundayOfWeek(value) : value;
+    return format === 'date' ? _getSundayOfWeek(value) : value;
   }
   return null;
 }
 
 // input "Raw Title" => output "rawTitleData"
-const formatHiddenTitle = (str) => `${getCamelCase(str)}Data`;
-const slashedDate = (date) => isDateValid(date) ? new Date(date).toLocaleDateString("en-US") : null;
-const isDateValid = (date) => getCamelCase(`${new Date(date)}`) !== 'invalidDate';
-const getValueIfEmpty = (prev, next) => (prev !== "" && next !== "") ? (prev + next) / 2 : "";
-const isRowNotEmpty = (str) => getCamelCase(str) !== '';
+const _formatHiddenTitle = (str) => str.length ? `${_getCamelCase(str)}Data` : null;
+
+const _isDateValid = (date) => _getCamelCase(`${new Date(date)}`) !== 'invalidDate';
+
+const _slashedDate = (date) => _getSundayOfWeek(date).toLocaleDateString("en-US");
+
+const _getValueIfEmpty = (prev, next) => (prev !== "" && next !== "") ? (prev + next) / 2 : "";
+
+const _addDateEntry = (currentDate) => { return { "sunday": currentDate, "values": {}, "rawValues": {} } };
