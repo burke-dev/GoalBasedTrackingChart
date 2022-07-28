@@ -1,34 +1,89 @@
+"use strict";
+
+const validSubModules = ["formatted", "percentage", "export", "progress"];
+
+exports.GetModuleData = function _getWeightLossModuleData(jsonData){
+  const weightLossObj = jsonData.weightLoss;
+
+  _gsTestResults(weightLossObj.data.rawDataArray, weightLossObj.goals.goalArray);
+
+  return weightLossObj.subModules
+    .filter(subModule => validSubModules.includes(subModule.toLowerCase()))
+    .map((subModule, i) => _getOutputSubModuleData(subModule, weightLossObj, i)).filter(n => n);
+};
+
+function _getOutputSubModuleData(subModule, weightLossObj, i){
+  if(subModule === "export"){
+    // used for debugging - it converts the raw data in the spreadsheet into an array of arrays - paste into the empty array of "rawDataArray"
+    return {
+      "subModule": {
+        "name":"export",
+        "value": weightLossObj.data.rawDataArray,
+        "specials": []
+      },
+    };
+  }
+  const formattedData = _getRawFormattedData(weightLossObj.data.rawDataArray, weightLossObj.goals.goalArray, weightLossObj.specials);
+  switch(subModule){
+    case "percentage":
+      return _getPercentageData(formattedData.allEntries, formattedData.goalData);
+    case "formatted":
+      return _getFormattedData(formattedData.allEntries);
+    case "progress":
+      return _getProgressData(formattedData, weightLossObj.specials);
+    default:
+      console.error(`Unknown Submodule - ${subModule}`);
+      return null;
+  }
+}
+
+function _gsTestResults(rawDataArray, goalArray){
+  const rawData = RawData(rawDataArray);
+  const percentage = Percentage(rawDataArray, goalArray);
+  const formatted = Formatted(rawDataArray, goalArray);
+  const stairFlightsProgress = GoalProgress(rawDataArray, goalArray, "stair flights");
+  const weightProgress = GoalProgress(rawDataArray, goalArray, "weight");
+  console.log("Google Sheets Test Complete!");
+}
+
 // used for debugging - it converts the raw data in the spreadsheet into an array of arrays - paste into the empty array of "rawDataArray"
 function RawData(rawDataArray){
-  return rawDataArray;
+  // an empty row of data appended to the end of the arrays
+  const emptyRow = rawDataArray[0].map(_ => '""').join(',');
+  return rawDataArray.map(row => {
+    const joinedRowEntries = String(row).split(",").map(entry => `"${entry}"`).join(',');
+    return `[${joinedRowEntries}],`
+  }).filter(row => _isRowNotEmpty(row)).concat(`[${emptyRow}]`);
 }
 
 // input is the raw data and outputs the data as percentages
 function Percentage(rawDataArray, goalArray){
   const formattedData = _getRawFormattedData(rawDataArray, goalArray, []);
-  const allData = _getEntriesAsPercentageOfGoals(formattedData.allEntries, formattedData.goalData);
-  const getPercentage = _convertDataBackToArrays(allData);
-  return getPercentage;
+  const dataAsPercentage = _getEntriesAsPercentageOfGoals(formattedData.allEntries, formattedData.goalData);
+  const percentageAsArray = _convertDataBackToArrays(dataAsPercentage);
+  return percentageAsArray;
 }
 
 // input is the raw data and outputs data in weekly intervals (Sundays)
 function Formatted(rawDataArray, goalArray){
   const formattedData = _getRawFormattedData(rawDataArray, goalArray, []);
-  const getFormatted = _convertDataBackToArrays(formattedData.allEntries);
-  return getFormatted;
+  const formattedAsArray = _convertDataBackToArrays(formattedData.allEntries);
+  return formattedAsArray;
 }
 
 // input is same as the others, but adds the param for a single goal -- to chart the progress being made and projecting the results to the end date
-function GoalProgress(rawDataArray, goalArray, special){
-  const formattedData = _getRawFormattedData(rawDataArray, goalArray, [special]);
-  const getProgress = _getSingleGoalProgressComparison(formattedData.allEntries.dateRanges, formattedData.goalData, [special]);
-  return getProgress[0];
+function GoalProgress(rawDataArray, goalArray, goalName){
+  const formattedData = _getRawFormattedData(rawDataArray, goalArray, [goalName]);
+  const progressAsArray = _getSingleGoalProgressComparison(formattedData.allEntries.dateRanges, formattedData.goalData, [goalName]);
+  return progressAsArray[0];
 }
 
+// the rest are internal functions and are not used by the users
 // converts the raw data from the spreadsheet to a usable form
-function _getRawFormattedData(rawDataArray, goalArray, specials){
+function _getRawFormattedData(rawDataArray, goalArray, goalNames){
   const goalData = _getGoalData(goalArray);
-  const allEntries = _getHeadersAndDateRanges(goalData, rawDataArray, specials);
+  const validGoalNames = goalNames.filter(goalName => goalName && goalName.length);
+  const allEntries = _getHeadersAndDateRanges(goalData, rawDataArray, validGoalNames);
   _peakOfEachValueByWeek(allEntries.dateRanges, goalData);
   _fillSingleEmptyEntry(allEntries.dateRanges);
   _fillSpecialObjectsWithPeakValues(allEntries.dateRanges);
@@ -36,39 +91,82 @@ function _getRawFormattedData(rawDataArray, goalArray, specials){
   return { allEntries, goalData };
 }
 
+// input is the raw data and outputs the data as percentages
+function _getPercentageData(allEntries, goalData){
+  const allData = _getEntriesAsPercentageOfGoals(allEntries, goalData);
+  return {
+    "subModule": {
+      "name": "percentage",
+      "value": _convertDataBackToArrays(allData),
+      "specials": []
+    },
+  };
+}
+
+// input is the raw data and outputs data in weekly intervals (Sundays)
+const _getFormattedData = (allEntries) => {
+  return {
+    "subModule": {
+      "name": "formatted",
+      "value": _convertDataBackToArrays(allEntries),
+      "specials": []
+    },
+  }
+};
+
+function _getProgressData(formattedData, specials){
+  const validHeaders = formattedData.allEntries.headers.map(header => header.hiddenTitle);
+  specials = specials
+      .filter(special => special && special.length && validHeaders.includes(_formatHiddenTitle(special) ))
+      .map(special => special.toLowerCase());
+
+  if(specials.length){
+    return {
+      "subModule": {
+        "name":"progress",
+        "value": _getSingleGoalProgressComparison(formattedData.allEntries.dateRanges, formattedData.goalData, specials),
+        specials
+      },
+    }
+  }
+  return null;
+}
+
 // input is same as the others, but adds the param for a single goal -- to chart the progress being made and projecting the results to the end date
 function _getSingleGoalProgressComparison(dateRanges, goalData, goalNames){
   return goalNames.map(goalName => {
     const goalKey = _formatHiddenTitle(goalName);
     const myGoal = goalData[goalKey] ?? false;
-    if(myGoal){
-      let dateRange = dateRanges[goalKey] ?? false;
-      if(!dateRange){
-        return;
-      }
-      let tempObj = _fillAllCentralEmptyValues(dateRange);
-      return [
-          [`${_capitalizeEachTitleWord(goalName)} Projection`], 
-          ["Date", "Results", "Projection"]
-        ].concat(Object.keys(dateRange)
-          .map(key => {
-            return {
-              date: dateRange[key].sunday,
-              value: dateRange[key].value
-            }
-          })
-          .map((entry, i) => {
-            const val = i < tempObj.lumpedValues.length - 1 ? tempObj.lumpedValues[i]: entry;
-            return _getSingleGoalProgressRow(val, i, tempObj.details, myGoal);
-          })
-        );
-    }
-    console.error(`Unknown Goal Value - ${goalName ?? "?"}`);
-    return null;
+    const dateRange = dateRanges[goalKey] ?? false;
+    return myGoal && dateRange
+      ? _getGoalOutputArray(goalName, myGoal, dateRange)
+      : [`Problem with Goal - ${goalName}`];
   }).filter(n => n);
 }
 
-// the rest are internal functions and are not used by the users
+function _getGoalOutputArray(goalName, myGoal, dateRange){
+  const entriesWithValues = _fillAllCentralEmptyValues(dateRange);
+  const lumpedValues = entriesWithValues.lumpedValues;
+  const lastEntry = (_ => {
+    let lastI = Math.max(...lumpedValues.map(x => x.i));
+    return lumpedValues.filter(x => x.i === lastI)[0]
+  })();
+  return [
+    [`${_capitalizeEachTitleWord(goalName)} Projection`], 
+    ["Date", "Results", "Projection"]
+  ].concat(Object.keys(dateRange)
+    .map(key => {
+      return {
+        date: dateRange[key].sunday,
+        value: dateRange[key].value
+      }
+    })
+    .map((projectedValue, i) => {
+      let graphEntry = i < lumpedValues.length - 1 ? lumpedValues[i]: projectedValue;
+      return _getSingleGoalProgressRow(graphEntry, i, entriesWithValues.details, myGoal, lastEntry);
+    })
+  );
+}
 
 // the object sent returned to the spreadsheet
 function _convertDataBackToArrays(allEntries){
@@ -145,18 +243,18 @@ function _filterGoals(goals){
   });
 }
 
-function _getHeadersAndDateRanges(goalData, rawEntries, specials){
+function _getHeadersAndDateRanges(goalData, rawEntries, goalNames){
   if(Array.isArray(rawEntries)){
     let headers = [];
-    let dateRanges = _getFullTimeDateRanges(goalData, specials);
+    let dateRanges = _getFullTimeDateRanges(goalData, goalNames);
     rawEntries.forEach((entryRow, i) => {
       entryRow.forEach((data, j) => {
         if(i === 0){
           const hiddenTitle = _formatHiddenTitle(data);
           headers.push({ title: data, hiddenTitle });
-          Object.keys(dateRanges.fullTime).forEach(rangesKey => {
-            dateRanges.fullTime[rangesKey].values[hiddenTitle] = ''
-            dateRanges.fullTime[rangesKey].rawValues[hiddenTitle] = []
+          Object.keys(dateRanges.fullTime).forEach(key => {
+            dateRanges.fullTime[key].values[hiddenTitle] = ''
+            dateRanges.fullTime[key].rawValues[hiddenTitle] = []
           });
           return;
         }
@@ -175,37 +273,49 @@ function _getHeadersAndDateRanges(goalData, rawEntries, specials){
 }
 
 //gets the range of all the entries from start to goal
-function _getFullTimeDateRanges(goalData, specials){
-  specials = specials.filter(special => special && special.length);
-  const dateRanges = _getSpecialEnds(goalData, specials);
+function _getFullTimeDateRanges(goalData, goalNames){
+  const dateRanges = _getSpecialEnds(goalData, goalNames);
   
   const startDateMidnight = new Date(goalData.dateData.start).setHours(0,0,0,0);
   let currentDate = new Date(startDateMidnight);
-  let tempDates = { [_getDateTitle(currentDate)]: _addDateEntry(currentDate) };
-  while( _sundayIsLessThanEndDate(currentDate, dateRanges.fullTime.end) ){
-    let tempDate = new Date(currentDate.valueOf());
-    tempDate.setDate(tempDate.getDate() + 7);
-    currentDate = tempDate;
-    tempDates[_getDateTitle(currentDate)] = _addDateEntry(currentDate);
+  let isoDate = _formatDate(currentDate);
+  const end = dateRanges.fullTime.end;
+  dateRanges.fullTime = { [_getDateTitle(currentDate)]: _addDateEntry(currentDate) };
+  while( _sundayIsLessThanEndDate(isoDate, end) ){
+    currentDate = (_ => {
+      let tempDate = new Date(currentDate.valueOf());
+      tempDate.setDate(tempDate.getDate() + 7);
+      return tempDate;
+    })();
+    isoDate = _formatDate(currentDate);
+    dateRanges.fullTime[_getDateTitle(currentDate)] = _addDateEntry(currentDate);
   }
-  dateRanges.fullTime = tempDates;
 
   return dateRanges;
 }
 
-function _getSpecialEnds(goalData, specialNames){
+function _formatDate(start){
+  let tempDate = new Date(start);
+  new Date(tempDate).setHours(0,0,0,0);
+  return tempDate.toISOString();
+}
+
+function _getSpecialEnds(goalData, goalNames){
     let outputObj = {
       "fullTime": {
         "end": goalData.dateData.end
       }
     }
-    if(specialNames.length){
+    if(goalNames.length){
       outputObj.end = {};
-      specialNames.forEach(goalName => {
+      goalNames.forEach(goalName => {
         const hiddenTitle = _formatHiddenTitle(goalName);
-        const specialEnd = goalData[hiddenTitle].specialEndDate;
-        const goalEnd = _getCamelCase(goalName);
-        outputObj.end[goalEnd] = _isDateValid(specialEnd) ? specialEnd : goalData.dateData.end;
+        const myGoal = goalData[hiddenTitle] ?? false;
+        if(myGoal){
+          const specialEnd = myGoal.specialEndDate;
+          const goalEnd = _getCamelCase(goalName);
+          outputObj.end[goalEnd] = _isDateValid(specialEnd) ? specialEnd : goalData.dateData.end;
+        }
       });
     }
     return outputObj;
@@ -213,8 +323,8 @@ function _getSpecialEnds(goalData, specialNames){
 
 const _sundayIsLessThanEndDate = (currentDate, endDate) => {
   // some times Google Sheets will add an hour to the date and cause the comparison to fail on the last date
-  let current = _slashedDate(currentDate);
-  let end = _slashedDate(endDate);
+  let current = new Date(currentDate).toISOString();
+  let end = new Date(endDate).toISOString();
   return new Date(current) <= new Date(end);
 };
 
@@ -258,7 +368,7 @@ function _fillSingleEmptyEntry(entries){
 function _fillSpecialObjectsWithPeakValues(dateRanges){
   if(dateRanges.end){
     Object.keys(dateRanges.end).forEach(key => {
-      const hiddenTitle = _formatHiddenTitle(key);
+      let hiddenTitle = _formatHiddenTitle(key);
       dateRanges[hiddenTitle] = {};
       Object.keys(dateRanges.fullTime).forEach(date => {
         const fullTime = dateRanges.fullTime[date];
@@ -282,9 +392,7 @@ function _getEntriesAsPercentageOfGoals(allEntries, goals){
         const goalData = goals[key];
         const value = entries[key];
         if(value != ''){
-          const start = _convertValueToNumberByFormat(goalData.format, goalData.start);
-          const end = _convertValueToNumberByFormat(goalData.format, goalData.end);
-          dateRange[entriesKey].values[key] = (start - value)/(start - end);
+          dateRange[entriesKey].values[key] = _getPercentage(goalData.start, goalData.end, value, goalData.format);
         }
       });
     });
@@ -306,13 +414,34 @@ function _pushPeakValueForWeek(allValues, goalDetails){
   return _convertValueToNumberByFormat(goalDetails.format, sortedValues[0]);
 }
 
-function _getSingleGoalProgressRow(val, i, details, myGoal){
-  const start = _convertValueToNumberByFormat(myGoal.format, myGoal.start);
-  const end = _convertValueToNumberByFormat(myGoal.format, myGoal.end);
-  let percentage = val.value !== '' ? (start - val.value)/(start - end) : '';
-  percentage = percentage >= 0 ? percentage : 0;
-  const totalPercentage = i >= details.lastIndex ?  i / details.totalEntries : '';
-  return [val.date, percentage, totalPercentage];
+function _getSingleGoalProgressRow(graphEntry, i, details, myGoal, lastEntry){
+  const percentage = (_ => {
+    if(graphEntry.value !== ''){
+      const currentValue = _convertValueToNumberByFormat(myGoal.format, graphEntry.value);
+      const outputPercentage = _getPercentage(myGoal.start, myGoal.end, currentValue, myGoal.format);
+      return outputPercentage > 0 ? outputPercentage : 0;
+    }
+    return '';
+  })();
+  
+  const totalPercentage = (_ => {
+    if(i >= details.lastIndex){
+      const lastValue = _convertValueToNumberByFormat(myGoal.format, lastEntry.value);
+      const lastEntryPercentage = _getPercentage(myGoal.start, myGoal.end, lastValue, myGoal.format);
+      const addPercentage = (lastEntryPercentage / lastEntry.i) * (i - details.lastIndex);
+      return lastEntryPercentage + addPercentage;
+    }
+    return '';
+  })();
+
+  return [graphEntry.date, percentage, totalPercentage];
+}
+
+function _getPercentage(goalStart, goalEnd, currentValue, format){
+  const start = _convertValueToNumberByFormat(format, goalStart);
+  const end = _convertValueToNumberByFormat(format, goalEnd);  
+  const value = _convertValueToNumberByFormat(format, currentValue);  
+  return (start - value) / (start - end);
 }
 
 // fills all the empty values within a set of filled values
@@ -443,11 +572,7 @@ function _getValueByFormat(format, value){
 
 // input "Raw Title" => output "rawTitleData"
 const _formatHiddenTitle = (str) => str.length ? `${_getCamelCase(str)}Data` : null;
-
 const _isDateValid = (date) => _getCamelCase(`${new Date(date)}`) !== 'invalidDate';
-
-const _slashedDate = (date) => _getSundayOfWeek(date).toLocaleDateString("en-US");
-
 const _getValueIfEmpty = (prev, next) => (prev !== "" && next !== "") ? (prev + next) / 2 : "";
-
 const _addDateEntry = (currentDate) => { return { "sunday": currentDate, "values": {}, "rawValues": {} } };
+const _isRowNotEmpty = (str) => _getCamelCase(str) !== '';
