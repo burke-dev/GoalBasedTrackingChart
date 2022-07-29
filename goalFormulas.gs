@@ -1,51 +1,5 @@
 "use strict";
 
-const validSubModules = ["formatted", "percentage", "export", "progress"];
-
-exports.GetModuleData = function _getWeightLossModuleData(jsonData){
-  const weightLossObj = jsonData.weightLoss;
-
-  _gsTestResults(weightLossObj.data.rawDataArray, weightLossObj.goals.goalArray);
-
-  return weightLossObj.subModules
-    .filter(subModule => validSubModules.includes(subModule.toLowerCase()))
-    .map((subModule, i) => _getOutputSubModuleData(subModule, weightLossObj, i)).filter(n => n);
-};
-
-function _getOutputSubModuleData(subModule, weightLossObj, i){
-  if(subModule === "export"){
-    // used for debugging - it converts the raw data in the spreadsheet into an array of arrays - paste into the empty array of "rawDataArray"
-    return {
-      "subModule": {
-        "name":"export",
-        "value": weightLossObj.data.rawDataArray,
-        "specials": []
-      },
-    };
-  }
-  const formattedData = _getRawFormattedData(weightLossObj.data.rawDataArray, weightLossObj.goals.goalArray, weightLossObj.specials);
-  switch(subModule){
-    case "percentage":
-      return _getPercentageData(formattedData.allEntries, formattedData.goalData);
-    case "formatted":
-      return _getFormattedData(formattedData.allEntries);
-    case "progress":
-      return _getProgressData(formattedData, weightLossObj.specials);
-    default:
-      console.error(`Unknown Submodule - ${subModule}`);
-      return null;
-  }
-}
-
-function _gsTestResults(rawDataArray, goalArray){
-  const rawData = RawData(rawDataArray);
-  const percentage = Percentage(rawDataArray, goalArray);
-  const formatted = Formatted(rawDataArray, goalArray);
-  const stairFlightsProgress = GoalProgress(rawDataArray, goalArray, "stair flights");
-  const weightProgress = GoalProgress(rawDataArray, goalArray, "weight");
-  console.log("Google Sheets Test Complete!");
-}
-
 // used for debugging - it converts the raw data in the spreadsheet into an array of arrays - paste into the empty array of "rawDataArray"
 function RawData(rawDataArray){
   // an empty row of data appended to the end of the arrays
@@ -60,14 +14,14 @@ function RawData(rawDataArray){
 function Percentage(rawDataArray, goalArray){
   const formattedData = _getRawFormattedData(rawDataArray, goalArray, []);
   const dataAsPercentage = _getEntriesAsPercentageOfGoals(formattedData.allEntries, formattedData.goalData);
-  const percentageAsArray = _convertDataBackToArrays(dataAsPercentage);
+  const percentageAsArray = _convertDataBackToArrays(dataAsPercentage, 'Percentage Of Each Goal Reached');
   return percentageAsArray;
 }
 
 // input is the raw data and outputs data in weekly intervals (Sundays)
 function Formatted(rawDataArray, goalArray){
   const formattedData = _getRawFormattedData(rawDataArray, goalArray, []);
-  const formattedAsArray = _convertDataBackToArrays(formattedData.allEntries);
+  const formattedAsArray = _convertDataBackToArrays(formattedData.allEntries, 'Goals Grouped in Weekly Amounts');
   return formattedAsArray;
 }
 
@@ -91,56 +45,13 @@ function _getRawFormattedData(rawDataArray, goalArray, goalNames){
   return { allEntries, goalData };
 }
 
-// input is the raw data and outputs the data as percentages
-function _getPercentageData(allEntries, goalData){
-  const allData = _getEntriesAsPercentageOfGoals(allEntries, goalData);
-  return {
-    "subModule": {
-      "name": "percentage",
-      "value": _convertDataBackToArrays(allData),
-      "specials": []
-    },
-  };
-}
-
-// input is the raw data and outputs data in weekly intervals (Sundays)
-const _getFormattedData = (allEntries) => {
-  return {
-    "subModule": {
-      "name": "formatted",
-      "value": _convertDataBackToArrays(allEntries),
-      "specials": []
-    },
-  }
-};
-
-function _getProgressData(formattedData, specials){
-  const validHeaders = formattedData.allEntries.headers.map(header => header.hiddenTitle);
-  specials = specials
-      .filter(special => special && special.length && validHeaders.includes(_formatHiddenTitle(special) ))
-      .map(special => special.toLowerCase());
-
-  if(specials.length){
-    return {
-      "subModule": {
-        "name":"progress",
-        "value": _getSingleGoalProgressComparison(formattedData.allEntries.dateRanges, formattedData.goalData, specials),
-        specials
-      },
-    }
-  }
-  return null;
-}
-
 // input is same as the others, but adds the param for a single goal -- to chart the progress being made and projecting the results to the end date
 function _getSingleGoalProgressComparison(dateRanges, goalData, goalNames){
   return goalNames.map(goalName => {
     const goalKey = _formatHiddenTitle(goalName);
     const myGoal = goalData[goalKey] ?? false;
     const dateRange = dateRanges[goalKey] ?? false;
-    return myGoal && dateRange
-      ? _getGoalOutputArray(goalName, myGoal, dateRange)
-      : [`Problem with Goal - ${goalName}`];
+    return myGoal && dateRange ? _getGoalOutputArray(goalName, myGoal, dateRange) : [`Problem with Goal - ${goalName}`];
   }).filter(n => n);
 }
 
@@ -152,13 +63,13 @@ function _getGoalOutputArray(goalName, myGoal, dateRange){
     return lumpedValues.filter(x => x.i === lastI)[0]
   })();
   return [
-    [`${_capitalizeEachTitleWord(goalName)} Projection`], 
+    [`${_capitalizeEachTitleWord(goalName)} Projection`],
     ["Date", "Results", "Projection"]
   ].concat(Object.keys(dateRange)
     .map(key => {
       return {
-        date: dateRange[key].sunday,
-        value: dateRange[key].value
+        "date": dateRange[key].sunday,
+        "value": dateRange[key].value
       }
     })
     .map((projectedValue, i) => {
@@ -169,9 +80,9 @@ function _getGoalOutputArray(goalName, myGoal, dateRange){
 }
 
 // the object sent returned to the spreadsheet
-function _convertDataBackToArrays(allEntries){
+function _convertDataBackToArrays(allEntries, title){
   const fullTime = allEntries.dateRanges.fullTime;
-  return [allEntries.headers.map(header => header.title)]
+  return [[title], allEntries.headers.map(header => header.title)]
     .concat(Object.keys(fullTime)
       .map(objectKey => {
         const entryRow = fullTime[objectKey];
@@ -185,7 +96,7 @@ function _convertDataBackToArrays(allEntries){
       })
       .filter(n => n)
     );
-  }
+}
 
 // converts to users goals into a usable object
 function _getGoalData(goalArray){
@@ -211,7 +122,7 @@ function _getGoalData(goalArray){
       }
     });
     _filterGoals(goals);
-    
+
     return goals;
   }
 }
@@ -275,9 +186,11 @@ function _getHeadersAndDateRanges(goalData, rawEntries, goalNames){
 //gets the range of all the entries from start to goal
 function _getFullTimeDateRanges(goalData, goalNames){
   const dateRanges = _getSpecialEnds(goalData, goalNames);
-  
-  const startDateMidnight = new Date(goalData.dateData.start).setHours(0,0,0,0);
-  let currentDate = new Date(startDateMidnight);
+
+  let currentDate = (_ => {
+    const startDateMidnight = new Date(goalData.dateData.start).setHours(0,0,0,0);
+    return new Date(startDateMidnight);
+  })();
   let isoDate = _formatDate(currentDate);
   const end = dateRanges.fullTime.end;
   dateRanges.fullTime = { [_getDateTitle(currentDate)]: _addDateEntry(currentDate) };
@@ -309,8 +222,10 @@ function _getSpecialEnds(goalData, goalNames){
     if(goalNames.length){
       outputObj.end = {};
       goalNames.forEach(goalName => {
-        const hiddenTitle = _formatHiddenTitle(goalName);
-        const myGoal = goalData[hiddenTitle] ?? false;
+        const myGoal = (_ => {
+          const hiddenTitle = _formatHiddenTitle(goalName);
+          return goalData[hiddenTitle] ?? false;
+        })();
         if(myGoal){
           const specialEnd = myGoal.specialEndDate;
           const goalEnd = _getCamelCase(goalName);
@@ -321,10 +236,10 @@ function _getSpecialEnds(goalData, goalNames){
     return outputObj;
 }
 
+// some times Google Sheets will add an hour to the date and cause the comparison to fail on the last date
 const _sundayIsLessThanEndDate = (currentDate, endDate) => {
-  // some times Google Sheets will add an hour to the date and cause the comparison to fail on the last date
-  let current = new Date(currentDate).toISOString();
-  let end = new Date(endDate).toISOString();
+  const current = new Date(currentDate).toISOString();
+  const end = new Date(endDate).toISOString();
   return new Date(current) <= new Date(end);
 };
 
@@ -340,7 +255,7 @@ function _getDateTitle(date){
 //returns the "best" value for each week: low for isDescending, high for !isDescending
 function _peakOfEachValueByWeek(dateRanges, goalData){
   Object.keys(dateRanges.fullTime).forEach(entriesKey => {
-    let entry = dateRanges.fullTime[entriesKey];
+    const entry = dateRanges.fullTime[entriesKey];
     Object.keys(dateRanges.fullTime[entriesKey].values).forEach(vKey => {
       entry.values[vKey] = _pushPeakValueForWeek(entry.rawValues[vKey], goalData[vKey]);
     });
@@ -356,8 +271,8 @@ function _fillSingleEmptyEntry(entries){
       let fullTime = entries.fullTime[allKeys[i]].values;
       Object.keys(fullTime).forEach(valueKey => {
         if(fullTime[valueKey] === ''){
-          let prev = entries.fullTime[allKeys[i - 1]].values[valueKey];
-          let next = entries.fullTime[allKeys[i + 1]].values[valueKey];
+          const prev = entries.fullTime[allKeys[i - 1]].values[valueKey];
+          const next = entries.fullTime[allKeys[i + 1]].values[valueKey];
           fullTime[valueKey] = _getValueIfEmpty(prev, next);
         }
       });
@@ -368,7 +283,7 @@ function _fillSingleEmptyEntry(entries){
 function _fillSpecialObjectsWithPeakValues(dateRanges){
   if(dateRanges.end){
     Object.keys(dateRanges.end).forEach(key => {
-      let hiddenTitle = _formatHiddenTitle(key);
+      const hiddenTitle = _formatHiddenTitle(key);
       dateRanges[hiddenTitle] = {};
       Object.keys(dateRanges.fullTime).forEach(date => {
         const fullTime = dateRanges.fullTime[date];
@@ -423,7 +338,7 @@ function _getSingleGoalProgressRow(graphEntry, i, details, myGoal, lastEntry){
     }
     return '';
   })();
-  
+
   const totalPercentage = (_ => {
     if(i >= details.lastIndex){
       const lastValue = _convertValueToNumberByFormat(myGoal.format, lastEntry.value);
@@ -439,8 +354,8 @@ function _getSingleGoalProgressRow(graphEntry, i, details, myGoal, lastEntry){
 
 function _getPercentage(goalStart, goalEnd, currentValue, format){
   const start = _convertValueToNumberByFormat(format, goalStart);
-  const end = _convertValueToNumberByFormat(format, goalEnd);  
-  const value = _convertValueToNumberByFormat(format, currentValue);  
+  const end = _convertValueToNumberByFormat(format, goalEnd);
+  const value = _convertValueToNumberByFormat(format, currentValue);
   return (start - value) / (start - end);
 }
 
@@ -448,7 +363,7 @@ function _getPercentage(goalStart, goalEnd, currentValue, format){
 // still very clunky and can be optimized
 function _fillAllCentralEmptyValues(entries){
   const lastIndex = _getLastIndex(entries);
-  let lumpedValues = Object.keys(entries)
+  const lumpedValues = Object.keys(entries)
     .map((key, i) => {
       return { i, date: entries[key].sunday, value: entries[key].value }
     })
@@ -471,11 +386,11 @@ function _fillFilteredEmptyValues(entry, i, allEntries){
   if(previous.value === '' || nextValid.value === ''){
     return entry;
   }
-  let steps = nextValid.i - previous.i;
-  let diff = nextValid.value - previous.value - 1;
+  const steps = nextValid.i - previous.i;
+  const diff = nextValid.value - previous.value - 1;
   for(let z = 1; z < steps; z++){
-    let bIndex = previous.i + z;
-    let add = z * diff / steps;
+    const bIndex = previous.i + z;
+    const add = z * diff / steps;
     allEntries[bIndex].value = previous.value + add;
   }
   return entry;
